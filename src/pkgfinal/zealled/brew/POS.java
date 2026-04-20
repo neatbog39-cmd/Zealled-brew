@@ -315,11 +315,13 @@ public class POS extends javax.swing.JFrame {
         totalItems += qty;
     }
     
-    double tax = subtotal * taxRate;
-    total = subtotal + tax;
+    // 🔥 VAT BREAKDOWN
+    double vatable = subtotal / 1.12;  // Remove 12% VAT
+    double vat = vatable * 0.12;       // Calculate VAT
+    total = vatable + vat;             // Total = Vatable + VAT (same as before)
     
     // 🔥 NEW: Get cashier name, date, time
-    String cashierName = getCurrentCashierName(); // Implement this method
+    String cashierName = getCurrentCashierName();
     String orderDateTime = new java.text.SimpleDateFormat("MMM dd, yyyy hh:mm a").format(new java.util.Date());
     String orderType = cmbOrderType.getSelectedItem() != null ? 
                        cmbOrderType.getSelectedItem().toString() : "Dine In";
@@ -335,9 +337,9 @@ public class POS extends javax.swing.JFrame {
         receiptItems +
         "\n----------------------------\n" +
         "Total Items: " + totalItems + "\n" +
-        "Subtotal: ₱" + String.format("%.2f", subtotal) + "\n" +
-        "Tax(12%):   ₱" + String.format("%.2f", tax) + "\n" +
-        "TOTAL:      ₱" + String.format("%.2f", total) + "\n" +
+        "Vatable:    ₱" + String.format("%.2f", vatable) + "\n" +  // 🔥 NEW
+        "VAT(12%):   ₱" + String.format("%.2f", vat) + "\n" +      // 🔥 NEW
+        "TOTAL:      ₱" + String.format("%.2f", total) + "\n" +    // 🔥 SAME
         (cashInput.isEmpty() ? "" : 
          "💵 Cash:     ₱" + String.format("%.2f", Double.parseDouble(cashInput)) + "\n" +
          "🔄 Change:   ₱" + String.format("%.2f", change))
@@ -346,7 +348,7 @@ public class POS extends javax.swing.JFrame {
 }
 
 
-  private String getCurrentCashierName() {
+    private String getCurrentCashierName() {
     try (Connection con = ConnectorXampp.connect();
          PreparedStatement ps = con.prepareStatement(
              "SELECT full_name FROM users WHERE last_login = (SELECT MAX(last_login) FROM users WHERE role = 'Cashier') LIMIT 1")) {
@@ -404,15 +406,20 @@ public class POS extends javax.swing.JFrame {
             return;
         }
         
+        // 🔥 VAT BREAKDOWN IN CONFIRMATION
+        double vatable = subtotal / 1.12;
+        double vat = vatable * 0.12;
+        
         if (JOptionPane.showConfirmDialog(this, 
-            "💰 Total: ₱" + String.format("%.2f", total) + "\n" +
-            "💵 Cash:  ₱" + String.format("%.2f", cash) + "\n" +
-            "🔄 Change:₱" + String.format("%.2f", cash - total),
+            "💰 Vatable:  ₱" + String.format("%.2f", vatable) + "\n" +
+            "💰 VAT(12%): ₱" + String.format("%.2f", vat) + "\n" +
+            "💰 TOTAL:    ₱" + String.format("%.2f", total) + "\n\n" +
+            "💵 Cash:     ₱" + String.format("%.2f", cash) + "\n" +
+            "🔄 Change:   ₱" + String.format("%.2f", cash - total),
             "Confirm Payment", JOptionPane.YES_OPTION) == JOptionPane.YES_OPTION) {
             
             saveOrder(cash, cash - total);
             
-            // ✅ FIXED: Show COMPLETE receipt first, THEN reset
             String finalReceipt = txtDisplayPOS.getText() + 
                 "\n============================\n" +
                 "✅ PAID! THANK YOU! ☕\n" +
@@ -422,10 +429,9 @@ public class POS extends javax.swing.JFrame {
             txtDisplayPOS.setText(finalReceipt);
             txtDisplayPOS.setCaretPosition(txtDisplayPOS.getDocument().getLength());
             
-            // Auto reset after 3 seconds (longer delay)
             new Timer(3000, e -> {
                 resetPOS();
-                ((Timer)e.getSource()).stop(); // Stop timer
+                ((Timer)e.getSource()).stop();
             }).start();
         }
     } catch (Exception e) {

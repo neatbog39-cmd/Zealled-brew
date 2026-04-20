@@ -373,39 +373,39 @@ public class Products extends javax.swing.JFrame {
 
 
     // =========================  VALIDATION =========================
-    private boolean isProductSizeExists(String productName, String size, String category) {
-    // 🔥 FIXED: Check ALL THREE - Name + Size + Category (series)
-    String sql = "SELECT COUNT(*) FROM products WHERE LOWER(Name) = LOWER(?) AND LOWER(Size) = LOWER(?) AND LOWER(Category) = LOWER(?)";
-    
-    // 🔥 DURING EDIT: Exclude current ProductID
-    if (editingProductId != -1) {
-        sql += " AND ProductID != ?";
-    }
-    
-    try (java.sql.Connection con = ConnectorXampp.connect();
-         java.sql.PreparedStatement pst = con.prepareStatement(sql)) {
+    private boolean isProductSizeExists(String productName, String size) {
+        // 🔥 CASE-INSENSITIVE query using LOWER()
+        String sql = "SELECT COUNT(*) FROM products WHERE LOWER(Name) = LOWER(?) AND LOWER(Size) = LOWER(?)";
         
-        pst.setString(1, productName);
-        pst.setString(2, size);
-        pst.setString(3, category);  // 🔥 ADDED CATEGORY CHECK
-        
-        // 🔥 Set ProductID parameter ONLY during edit
+        // 🔥 DURING EDIT: Exclude current ProductID
         if (editingProductId != -1) {
-            pst.setInt(4, editingProductId);  // 🔥 Changed from 3 to 4
+            sql += " AND ProductID != ?";
         }
         
-        java.sql.ResultSet rs = pst.executeQuery();
-        
-        if (rs.next()) {
-            int count = rs.getInt(1);
-            System.out.println("🔍 Check: '" + productName + "' (" + size + ") [" + category + "] = " + count + " others");
-            return count > 0;
+        try (java.sql.Connection con = ConnectorXampp.connect();
+             java.sql.PreparedStatement pst = con.prepareStatement(sql)) {
+            
+            pst.setString(1, productName);
+            pst.setString(2, size);
+            
+            // 🔥 Set ProductID parameter ONLY during edit
+            if (editingProductId != -1) {
+                pst.setInt(3, editingProductId);
+            }
+            
+            java.sql.ResultSet rs = pst.executeQuery();
+            
+            if (rs.next()) {
+                int count = rs.getInt(1);
+                System.out.println("🔍 Case-insensitive check: '" + productName + "' (" + size + ") = " + count + " others");
+                return count > 0; // true ONLY if OTHER duplicate exists
+            }
+        } catch (Exception e) {
+            javax.swing.JOptionPane.showMessageDialog(this, "Error checking duplicate: " + e.getMessage());
         }
-    } catch (Exception e) {
-        javax.swing.JOptionPane.showMessageDialog(this, "Error checking duplicate: " + e.getMessage());
+        return false;
     }
-    return false;
-}
+    // ==================================================
     // ==================================================
 
 
@@ -863,7 +863,7 @@ public class Products extends javax.swing.JFrame {
         int quantity = Integer.parseInt(quantityStr);
         
         // 🔥🔥 NEW IMPROVED DUPLICATE CHECK - PUT IT HERE ⬇️
-       if (isProductSizeExists(name, size, category)) {
+       if (isProductSizeExists(name, size)) {
     javax.swing.JOptionPane.showMessageDialog(this, 
         editingProductId == -1 ? 
             "❌ Product '" + name + "' (" + size + ") already exists!" :
@@ -1027,7 +1027,7 @@ public class Products extends javax.swing.JFrame {
         int quantity = Integer.parseInt(quantityStr);
 
         // 🔥 DUPLICATE CHECK (SAME AS ADD BUTTON)
-        if (isProductSizeExists(name, size, category)) {
+        if (isProductSizeExists(name, size)) {
             javax.swing.JOptionPane.showMessageDialog(this, 
                 "❌ Another product '" + name + "' (" + size + ") already exists!\n" +
                 "💡 Choose different name or size.", 

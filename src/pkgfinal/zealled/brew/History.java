@@ -22,10 +22,10 @@ public class History extends javax.swing.JFrame {
         loadOrders();
     }
     
-    // ========================= TABLE SETUP =========================
-     private void setupHistoryTable(){
+   // ========================= TABLE SETUP =========================
+    private void setupHistoryTable(){
     String[] columns = {
-        "OrderID", "Date", "Type", "Products", "Subtotal", "Tax(12%)", "Total", "Cashier"  // 🔥 Added Cashier
+        "OrderID", "Date", "Type", "Products", "Vatable", "VAT(12%)", "Total", "Cash", "Change", "Cashier"
     };
 
     historyModel = new javax.swing.table.DefaultTableModel(columns,0){
@@ -37,23 +37,41 @@ public class History extends javax.swing.JFrame {
 
     jTableHistory.setModel(historyModel);
     
-    // 🔥 Make Cashier column narrower
-    jTableHistory.getColumnModel().getColumn(7).setPreferredWidth(120);
+    // 🔥 Right-align ALL currency columns (5-9)
+    javax.swing.table.DefaultTableCellRenderer rightRenderer = 
+        new javax.swing.table.DefaultTableCellRenderer();
+    rightRenderer.setHorizontalAlignment(javax.swing.SwingConstants.RIGHT);
+    
+    for (int i = 4; i <= 8; i++) {
+        jTableHistory.getColumnModel().getColumn(i).setCellRenderer(rightRenderer);
+    }
+    
+    // 🔥 Column widths
+    jTableHistory.getColumnModel().getColumn(0).setPreferredWidth(60);   // OrderID
+    jTableHistory.getColumnModel().getColumn(1).setPreferredWidth(120);  // Date
+    jTableHistory.getColumnModel().getColumn(2).setPreferredWidth(80);   // Type
+    jTableHistory.getColumnModel().getColumn(3).setPreferredWidth(200);  // Products
+    jTableHistory.getColumnModel().getColumn(7).setPreferredWidth(90);   // Cash
+    jTableHistory.getColumnModel().getColumn(8).setPreferredWidth(90);   // Change
+    jTableHistory.getColumnModel().getColumn(9).setPreferredWidth(120);  // Cashier
 }
-     
-     // ========================= DATA LOADERS =========================
+
+// ========================= DATA LOADERS =========================
     private void loadOrders(){
     historyModel.setRowCount(0);
 
-    String sql = "SELECT o.OrderID, o.OrderDate, o.OrderType, " +
-                 "GROUP_CONCAT(p.Name SEPARATOR ', ') AS Products, " +
-                 "SUM(od.Subtotal) AS OrderSubtotal, " +
-                 "o.TotalAmount " +
-                 "FROM orders o " +
-                 "JOIN order_details od ON o.OrderID = od.OrderID " +
-                 "JOIN products p ON od.ProductID = p.ProductID " +
-                 "GROUP BY o.OrderID " +
-                 "ORDER BY o.OrderID DESC";
+    String sql = """
+        SELECT o.OrderID, o.OrderDate, o.OrderType, 
+               GROUP_CONCAT(p.Name SEPARATOR ', ') AS Products,
+               SUM(od.Subtotal) AS OrderSubtotal,
+               o.TotalAmount, o.`Cash`, o.`Change`
+        FROM orders o 
+        JOIN order_details od ON o.OrderID = od.OrderID 
+        JOIN products p ON od.ProductID = p.ProductID 
+        GROUP BY o.OrderID 
+        ORDER BY o.OrderID DESC
+        LIMIT 100
+        """;
 
     try(Connection con = ConnectorXampp.connect();
         Statement st = con.createStatement();
@@ -61,112 +79,143 @@ public class History extends javax.swing.JFrame {
 
         while(rs.next()){
             double subtotal = rs.getDouble("OrderSubtotal");
-            double tax = subtotal * 0.12;
+            double vatable = subtotal / 1.12;  // 🔥 VATABLE
+            double vat = vatable * 0.12;       // 🔥 VAT
             double total = rs.getDouble("TotalAmount");
+            double cash = rs.getDouble("Cash");
+            double change = rs.getDouble("Change");
             
             String cashierName = getCashierNameForOrder(rs.getInt("OrderID"));
             
             historyModel.addRow(new Object[]{
                 rs.getInt("OrderID"),
-                rs.getString("OrderDate"),
+                rs.getString("OrderDate").substring(0, 16),  // Short date
                 rs.getString("OrderType"),
                 rs.getString("Products"),
-                "₱" + String.format("%.2f", subtotal),
-                "₱" + String.format("%.2f", tax),
-                "₱" + String.format("%.2f", total),
+                String.format("₱%.2f", vatable),  // 🔥 VATABLE
+                String.format("₱%.2f", vat),      // 🔥 VAT  
+                String.format("₱%.2f", total),    // 🔥 TOTAL
+                String.format("₱%.2f", cash),     // 🔥 CASH
+                String.format("₱%.2f", change),   // 🔥 CHANGE
                 cashierName
             });
         }
     }catch(Exception e){
-        JOptionPane.showMessageDialog(this,e.getMessage());
+        JOptionPane.showMessageDialog(this, "❌ Database Error: " + e.getMessage());
+        e.printStackTrace();
     }
 }
-  
+
+// ========================= RECEIPT DETAILS (MATCHES POS EXACTLY) =========================
     private void showOrderDetails(int orderId){
     StringBuilder receipt = new StringBuilder();
 
-    String orderSql = """
-        SELECT o.OrderDate, o.OrderType, o.TotalAmount, o.`Cash`, o.`Change`,
-               u.full_name AS CashierName 
-        FROM orders o 
-        LEFT JOIN users u ON o.UserID = u.id 
-        WHERE o.OrderID = ?
-        """;
-    
-    String detailsSql = """
-        SELECT p.Name, p.Size, od.AddonName, od.Quantity, od.Subtotal, 
-               od.BasePrice, od.AddonPrice 
-        FROM order_details od 
-        JOIN products p ON od.ProductID = p.ProductID 
-        WHERE od.OrderID = ? ORDER BY od.Subtotal DESC
-        """;
-
-    try(Connection con = ConnectorXampp.connect();
-        PreparedStatement orderPs = con.prepareStatement(orderSql);
-        PreparedStatement detailsPs = con.prepareStatement(detailsSql)){
-
-        orderPs.setInt(1, orderId);
-        ResultSet orderRs = orderPs.executeQuery();
+    try(Connection con = ConnectorXampp.connect()){
         
-        double cashAmount = 0;
-        double changeAmount = 0;
+        // 🔥 HEADER
+        String headerSql = """
+            SELECT o.OrderDate, o.OrderType, o.TotalAmount, o.Cash, o.`Change`,
+                   u.full_name AS CashierName 
+            FROM orders o 
+            LEFT JOIN users u ON o.UserID = u.id 
+            WHERE o.OrderID = ?
+            """;
         
-        if (orderRs.next()) {
-            String orderDate = orderRs.getString("OrderDate").substring(0, 16);
-            String orderType = orderRs.getString("OrderType");
-            double totalAmount = orderRs.getDouble("TotalAmount");
-            cashAmount = orderRs.getDouble("Cash");
-            changeAmount = orderRs.getDouble("Change");
+        try(PreparedStatement headerPs = con.prepareStatement(headerSql)){
+            headerPs.setInt(1, orderId);
+            ResultSet headerRs = headerPs.executeQuery();
             
-            String cashierName = orderRs.getString("CashierName");
-            
-            receipt.append("☕ ZEALLED BREWS ☕\n")
-                   .append("============================\n")
-                   .append("Order #").append(orderId).append("\n")
-                   .append("Cashier: ").append(cashierName != null ? cashierName : "Cashier").append("\n")
-                   .append("Date: ").append(orderDate).append("\n")
-                   .append("Type: ").append(orderType).append("\n\n");
+            if (headerRs.next()) {
+                String orderDateTime = new java.text.SimpleDateFormat("MMM dd, yyyy hh:mm a")
+                    .format(headerRs.getTimestamp("OrderDate"));
+                String orderType = headerRs.getString("OrderType");
+                String cashierName = headerRs.getString("CashierName");
+                
+                receipt.append("☕ ZEALLED BREWS ☕\n")
+                       .append("============================\n")
+                       .append("Cashier: ").append(cashierName != null ? cashierName : "Cashier").append("\n")
+                       .append("Date: ").append(orderDateTime).append("\n")
+                       .append("Type: ").append(orderType).append("\n\n");
+            }
         }
 
-        detailsPs.setInt(1, orderId);
-        ResultSet rs = detailsPs.executeQuery();
-
+        // 🔥 ITEMS
+        String itemsSql = """
+            SELECT p.Name, p.Size, od.AddonName, od.Quantity, od.Subtotal, 
+                   od.BasePrice, od.AddonPrice 
+            FROM order_details od 
+            JOIN products p ON od.ProductID = p.ProductID 
+            WHERE od.OrderID = ? ORDER BY od.Subtotal DESC
+            """;
+        
         double subtotal = 0;
-        while(rs.next()){
-            String name = rs.getString("Name");
-            String size = rs.getString("Size");
-            String addon = rs.getString("AddonName");
-            int qty = rs.getInt("Quantity");
-            double itemSubtotal = rs.getDouble("Subtotal");
+        int totalItems = 0;
+        
+        try(PreparedStatement itemsPs = con.prepareStatement(itemsSql)){
+            itemsPs.setInt(1, orderId);
+            ResultSet itemsRs = itemsPs.executeQuery();
             
-            subtotal += itemSubtotal;
-            String itemLine = String.format("%-25s x%-2d ₱%.2f", 
-                name + " (" + size + ")" + (addon.equals("None") ? "" : " +" + addon), 
-                qty, itemSubtotal);
-            receipt.append(itemLine).append("\n");
+            while(itemsRs.next()){
+                String name = itemsRs.getString("Name");
+                String size = itemsRs.getString("Size");
+                String addon = itemsRs.getString("AddonName");
+                int qty = itemsRs.getInt("Quantity");
+                double itemSubtotal = itemsRs.getDouble("Subtotal");
+                
+                subtotal += itemSubtotal;
+                totalItems += qty;
+                
+                String displayName = name + " (" + size + ")" + 
+                    (addon.equals("None") ? "" : " +" + addon);
+                String itemLine = String.format("%-25s x%-2d ₱%.2f", displayName, qty, itemSubtotal);
+                receipt.append(itemLine).append("\n");
+            }
         }
 
-        double tax = subtotal * 0.12;
-        receipt.append("\n----------------------------\n")
-               .append("Subtotal: ₱").append(String.format("%.2f", subtotal)).append("\n")
-               .append("Tax(12%):  ₱").append(String.format("%.2f", tax)).append("\n")
-               .append("TOTAL:     ₱").append(String.format("%.2f", subtotal + tax)).append("\n")
-               .append("💵 Cash:    ₱").append(String.format("%.2f", cashAmount)).append("\n")
-               .append("🔄 Change:  ₱").append(String.format("%.2f", changeAmount)).append("\n")
-               .append("============================\n")
-               .append("✅ Order Completed!\n")
-               .append("Thank you for choosing\n")
-               .append("   ZEALLED BREWS ☕");
+        // 🔥 VAT BREAKDOWN
+        double vatable = subtotal / 1.12;
+        double vat = vatable * 0.12;
+        double total = vatable + vat;
+        
+        // 🔥 FIXED: Use backticks for `Change` column
+        String paymentSql = "SELECT `Cash`, `Change` FROM orders WHERE OrderID = ?";
+        double cashAmount = 0, changeAmount = 0;
+        
+        try(PreparedStatement paymentPs = con.prepareStatement(paymentSql)){
+            paymentPs.setInt(1, orderId);
+            ResultSet paymentRs = paymentPs.executeQuery();
+            if(paymentRs.next()){
+                cashAmount = paymentRs.getDouble("Cash");
+                changeAmount = paymentRs.getDouble("Change");
+            }
+        }
 
+        // 🔥 FINAL RECEIPT
+        receipt.append("\n----------------------------\n")
+               .append("Total Items: ").append(totalItems).append("\n")
+               .append("Vatable:    ₱").append(String.format("%.2f", vatable)).append("\n")
+               .append("VAT(12%):   ₱").append(String.format("%.2f", vat)).append("\n")
+               .append("TOTAL:      ₱").append(String.format("%.2f", total)).append("\n")
+               .append("💵 Cash:     ₱").append(String.format("%.2f", cashAmount)).append("\n")
+               .append("🔄 Change:   ₱").append(String.format("%.2f", changeAmount)).append("\n")
+               .append("============================\n")
+               .append("✅ PAID! THANK YOU! ☕");
+
+        // 🔥 Display
+        javax.swing.JTextArea textArea = new javax.swing.JTextArea(receipt.toString());
+        textArea.setFont(new java.awt.Font("Monospaced", java.awt.Font.BOLD, 14));
+        textArea.setEditable(false);
+        textArea.setMargin(new java.awt.Insets(10, 10, 10, 10));
+        
         JOptionPane.showMessageDialog(
             this, 
-            new javax.swing.JScrollPane(new javax.swing.JTextArea(receipt.toString())),
-            "Receipt #"+orderId, 
+            new javax.swing.JScrollPane(textArea),
+            "📄 Receipt #"+orderId, 
             JOptionPane.INFORMATION_MESSAGE
         );
 
     }catch(Exception e){
-        JOptionPane.showMessageDialog(this, "Error: " + e.getMessage());
+        JOptionPane.showMessageDialog(this, "❌ Error loading receipt: " + e.getMessage());
         e.printStackTrace();
     }
 }
